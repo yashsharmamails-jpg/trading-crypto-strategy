@@ -1,0 +1,157 @@
+// This Pine Script™ source code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+
+//@version=5
+strategy("Crypto Multi-Confluence 15m Strategy", 
+     overlay=true, 
+     default_qty_type=strategy.percent_of_equity, 
+     default_qty_value=10,
+     initial_capital=10000,
+     commission_type=strategy.commission.percent,
+     commission_value=0.06,
+     slippage=2,
+     calc_on_every_tick=false)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░ INPUTS ░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+// --- EMA Settings ---
+emaFastLen   = input.int(9, "Fast EMA Length", minval=2, group="EMA Settings")
+emaSlowLen   = input.int(21, "Slow EMA Length", minval=2, group="EMA Settings")
+
+// --- RSI Settings ---
+rsiLen       = input.int(14, "RSI Length", minval=2, group="RSI Settings")
+rsiOB        = input.int(70, "RSI Overbought", minval=50, maxval=95, group="RSI Settings")
+rsiOS        = input.int(30, "RSI Oversold", minval=5, maxval=50, group="RSI Settings")
+
+// --- MACD Settings ---
+macdFast     = input.int(12, "MACD Fast Length", minval=2, group="MACD Settings")
+macdSlow     = input.int(26, "MACD Slow Length", minval=2, group="MACD Settings")
+macdSignal   = input.int(9, "MACD Signal Length", minval=2, group="MACD Settings")
+
+// --- ATR Settings ---
+atrLen       = input.int(14, "ATR Length", minval=1, group="ATR Settings")
+slMultiplier = input.float(1.5, "SL Multiplier (x ATR)", minval=0.5, step=0.1, group="ATR Settings")
+tpMultiplier = input.float(2.5, "TP Multiplier (x ATR)", minval=1.0, step=0.1, group="ATR Settings")
+
+// --- Volume Filter ---
+useVolFilter = input.bool(true, "Use Volume Filter", group="Volume Filter")
+volMaLen     = input.int(20, "Volume MA Length", minval=1, group="Volume Filter")
+volMultiple  = input.float(1.0, "Min Volume Multiple", minval=0.5, step=0.1, group="Volume Filter")
+
+// --- Trade Direction ---
+tradeLong    = input.bool(true, "Allow Long Trades", group="Trade Direction")
+tradeShort   = input.bool(true, "Allow Short Trades", group="Trade Direction")
+
+// --- Session Filter (optional) ---
+useSession   = input.bool(false, "Use Session Filter", group="Session Filter")
+sessionStart = input.int(0, "Session Start Hour (UTC)", minval=0, maxval=23, group="Session Filter")
+sessionEnd   = input.int(23, "Session End Hour (UTC)", minval=0, maxval=23, group="Session Filter")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░ CALCULATIONS ░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+// --- EMAs ---
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+
+// --- EMA Crossover Detection ---
+emaBullCross = ta.crossover(emaFast, emaSlow)
+emaBearCross = ta.crossunder(emaFast, emaSlow)
+
+// --- RSI ---
+rsi = ta.rsi(close, rsiLen)
+
+// --- MACD ---
+[macdLine, signalLine, histLine] = ta.macd(close, macdFast, macdSlow, macdSignal)
+
+// --- ATR ---
+atr = ta.atr(atrLen)
+
+// --- Volume ---
+volMA = ta.sma(volume, volMaLen)
+volCondition = useVolFilter ? (volume >= volMA * volMultiple) : true
+
+// --- Session ---
+currentHour = hour(time, "UTC")
+inSession = useSession ? (currentHour >= sessionStart and currentHour <= sessionEnd) : true
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░ ENTRY CONDITIONS ░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+// LONG Entry: EMA bullish cross + RSI not overbought + MACD histogram positive + Volume confirm
+longCondition = emaBullCross and 
+     rsi > rsiOS and rsi < rsiOB and 
+     histLine > 0 and 
+     volCondition and 
+     inSession and 
+     tradeLong
+
+// SHORT Entry: EMA bearish cross + RSI not oversold + MACD histogram negative + Volume confirm
+shortCondition = emaBearCross and 
+     rsi > rsiOS and rsi < rsiOB and 
+     histLine < 0 and 
+     volCondition and 
+     inSession and 
+     tradeShort
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░ SL / TP CALCULATION ░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+longSL  = close - (atr * slMultiplier)
+longTP  = close + (atr * tpMultiplier)
+shortSL = close + (atr * slMultiplier)
+shortTP = close - (atr * tpMultiplier)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░ EXECUTE TRADES ░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+if longCondition and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=longSL, limit=longTP)
+
+if shortCondition and strategy.position_size == 0
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=shortSL, limit=shortTP)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░ PLOTS & VISUALS ░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+// --- EMAs ---
+plot(emaFast, "Fast EMA", color=color.new(color.green, 0), linewidth=2)
+plot(emaSlow, "Slow EMA", color=color.new(color.red, 0), linewidth=2)
+
+// --- Entry Signals ---
+plotshape(longCondition, "Long Signal", shape.triangleup, location.belowbar, 
+     color=color.new(color.green, 0), size=size.small)
+plotshape(shortCondition, "Short Signal", shape.triangledown, location.abovebar, 
+     color=color.new(color.red, 0), size=size.small)
+
+// --- SL/TP Levels (only when in position) ---
+plot(strategy.position_size > 0 ? longSL : na, "Long SL", color=color.new(color.red, 50), 
+     style=plot.style_linebr, linewidth=1)
+plot(strategy.position_size > 0 ? longTP : na, "Long TP", color=color.new(color.green, 50), 
+     style=plot.style_linebr, linewidth=1)
+plot(strategy.position_size < 0 ? shortSL : na, "Short SL", color=color.new(color.red, 50), 
+     style=plot.style_linebr, linewidth=1)
+plot(strategy.position_size < 0 ? shortTP : na, "Short TP", color=color.new(color.green, 50), 
+     style=plot.style_linebr, linewidth=1)
+
+// --- Background color for active position ---
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 93) : 
+     strategy.position_size < 0 ? color.new(color.red, 93) : na)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░ ALERTS ░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(longCondition, "Long Entry Signal", 
+     "LONG Signal: EMA Cross Up + RSI OK + MACD Positive + Volume Confirmed")
+alertcondition(shortCondition, "Short Entry Signal", 
+     "SHORT Signal: EMA Cross Down + RSI OK + MACD Negative + Volume Confirmed")
