@@ -2,7 +2,7 @@
 // https://mozilla.org/MPL/2.0/
 
 //@version=5
-strategy("Crypto Multi-Confluence 15m Strategy v2", 
+strategy("Crypto Top-Down Multi-TF Strategy v3", 
      overlay=true, 
      default_qty_type=strategy.percent_of_equity, 
      default_qty_value=10,
@@ -18,18 +18,32 @@ strategy("Crypto Multi-Confluence 15m Strategy v2",
 // ░░░ INPUTS ░░░
 // ══════════════════════════════════════════════════════════════════════════════
 
-// --- Trend Filter (Macro) ---
-useTrendFilter = input.bool(true, "Use 200 EMA Trend Filter", group="Trend Filter")
-trendEmaLen    = input.int(200, "Trend EMA Length", minval=50, group="Trend Filter")
+// --- Top-Down Multi-Timeframe Analysis ---
+useDailyBias  = input.bool(true,  "Use Daily (1D) Macro Bias",     group="Top-Down Analysis", tooltip="Filter trades by daily trend direction")
+useHtfTrend   = input.bool(true,  "Use Higher TF Trend Filter",    group="Top-Down Analysis", tooltip="Confirm trend on intermediate higher timeframe")
+htfTimeframe  = input.timeframe("240", "Higher Timeframe", 
+     options=["60", "120", "240", "360", "720", "D"], 
+     group="Top-Down Analysis", 
+     tooltip="60=1H, 240=4H, D=Daily. Use 240 (4H) for 15m chart, D for 1H chart")
+htfEmaFast    = input.int(50, "HTF Fast EMA",  minval=10, group="Top-Down Analysis")
+htfEmaSlow    = input.int(200, "HTF Slow EMA", minval=50, group="Top-Down Analysis")
 
-// --- EMA Settings (Entry Trigger) ---
-emaFastLen   = input.int(9, "Fast EMA Length", minval=2, group="Entry EMAs")
+// --- Risk:Reward Setting ---
+rrChoice = input.string("1:2", "Risk:Reward Ratio", options=["1:1.5", "1:2"], group="Risk:Reward")
+rrMult = rrChoice == "1:2" ? 2.0 : 1.5
+
+// --- Stop Loss (ATR Based) ---
+atrLen       = input.int(14, "ATR Length", minval=1, group="Stop Loss")
+slMultiplier = input.float(1.5, "SL Multiplier (x ATR)", minval=0.5, step=0.1, group="Stop Loss")
+
+// --- EMA Settings (Entry Trigger on Chart TF) ---
+emaFastLen   = input.int(9,  "Fast EMA Length", minval=2, group="Entry EMAs")
 emaSlowLen   = input.int(21, "Slow EMA Length", minval=2, group="Entry EMAs")
 
-// --- ADX Filter (Trending Market Only) ---
+// --- ADX Filter ---
 useAdxFilter = input.bool(true, "Use ADX Trending Filter", group="ADX Filter")
 adxLen       = input.int(14, "ADX Length", minval=1, group="ADX Filter")
-adxMin       = input.float(20.0, "Min ADX (Trend Strength)", minval=10, step=1, group="ADX Filter")
+adxMin       = input.float(20.0, "Min ADX", minval=10, step=1, group="ADX Filter")
 
 // --- RSI Settings ---
 rsiLen       = input.int(14, "RSI Length", minval=2, group="RSI Filter")
@@ -39,83 +53,85 @@ rsiShortMin  = input.int(30, "RSI Min for Shorts", minval=10, maxval=50, group="
 rsiShortMax  = input.int(60, "RSI Max for Shorts", minval=40, maxval=80, group="RSI Filter")
 
 // --- MACD Settings ---
-macdFast     = input.int(12, "MACD Fast Length", minval=2, group="MACD Filter")
-macdSlow     = input.int(26, "MACD Slow Length", minval=2, group="MACD Filter")
-macdSignal   = input.int(9, "MACD Signal Length", minval=2, group="MACD Filter")
-
-// --- ATR / Risk Management ---
-atrLen       = input.int(14, "ATR Length", minval=1, group="Risk Management")
-slMultiplier = input.float(1.5, "SL Multiplier (x ATR)", minval=0.5, step=0.1, group="Risk Management")
-tp1Multiplier = input.float(1.5, "TP1 Multiplier (x ATR) - 50% close", minval=0.5, step=0.1, group="Risk Management")
-tp2Multiplier = input.float(4.0, "TP2 Multiplier (x ATR) - Final close", minval=1.0, step=0.1, group="Risk Management")
-useTrailingStop = input.bool(true, "Trail SL to Breakeven after TP1", group="Risk Management")
-
-// --- Volatility Filter ---
-useVolatilityFilter = input.bool(true, "Skip Extreme Volatility Spikes", group="Volatility Filter")
-atrAvgLen    = input.int(50, "ATR Average Length", minval=10, group="Volatility Filter")
-atrSpikeMult = input.float(2.5, "Max ATR Spike (x avg)", minval=1.5, step=0.1, group="Volatility Filter")
+macdFast     = input.int(12, "MACD Fast Length",   minval=2, group="MACD Filter")
+macdSlow     = input.int(26, "MACD Slow Length",   minval=2, group="MACD Filter")
+macdSignal   = input.int(9,  "MACD Signal Length", minval=2, group="MACD Filter")
 
 // --- Volume Filter ---
 useVolFilter = input.bool(true, "Use Volume Filter", group="Volume Filter")
 volMaLen     = input.int(20, "Volume MA Length", minval=1, group="Volume Filter")
 volMultiple  = input.float(1.1, "Min Volume Multiple", minval=0.5, step=0.1, group="Volume Filter")
 
-// --- Cooldown (Prevent Overtrading) ---
-useCooldown  = input.bool(true, "Use Cooldown Between Trades", group="Cooldown")
-cooldownBars = input.int(8, "Cooldown Bars (after exit)", minval=0, group="Cooldown")
+// --- Volatility Filter ---
+useVolatilityFilter = input.bool(true, "Skip Extreme Volatility Spikes", group="Volatility Filter")
+atrAvgLen    = input.int(50, "ATR Average Length", minval=10, group="Volatility Filter")
+atrSpikeMult = input.float(2.5, "Max ATR Spike (x avg)", minval=1.5, step=0.1, group="Volatility Filter")
 
-// --- Time-Based Exit ---
-useTimeExit  = input.bool(true, "Force Exit After N Bars", group="Time Exit")
-maxBarsInTrade = input.int(48, "Max Bars in Trade (48 = 12h on 15m)", minval=10, group="Time Exit")
+// --- Cooldown ---
+useCooldown  = input.bool(true, "Use Cooldown Between Trades", group="Cooldown")
+cooldownBars = input.int(8, "Cooldown Bars", minval=0, group="Cooldown")
 
 // --- Trade Direction ---
-tradeLong    = input.bool(true, "Allow Long Trades", group="Trade Direction")
+tradeLong    = input.bool(true, "Allow Long Trades",  group="Trade Direction")
 tradeShort   = input.bool(true, "Allow Short Trades", group="Trade Direction")
 
+// --- Visual Settings ---
+showLines    = input.bool(true, "Show SL/TP/Entry Lines", group="Visuals")
+showLabels   = input.bool(true, "Show Price Labels",      group="Visuals")
+showHtfTable = input.bool(true, "Show Top-Down Analysis Table", group="Visuals")
+
 // --- Backtest Date Range ---
-startDate    = input.time(timestamp("01 Nov 2025 00:00 +0000"), "Backtest Start Date", group="Backtest Range")
-endDate      = input.time(timestamp("01 Jun 2026 00:00 +0000"), "Backtest End Date", group="Backtest Range")
+startDate    = input.time(timestamp("01 Nov 2025 00:00 +0000"), "Backtest Start", group="Backtest Range")
+endDate      = input.time(timestamp("01 Jun 2026 00:00 +0000"), "Backtest End",   group="Backtest Range")
 inDateRange  = time >= startDate and time <= endDate
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ░░░ CALCULATIONS ░░░
+// ░░░ TOP-DOWN MULTI-TIMEFRAME DATA ░░░
 // ══════════════════════════════════════════════════════════════════════════════
 
-// --- EMAs ---
-emaFast  = ta.ema(close, emaFastLen)
-emaSlow  = ta.ema(close, emaSlowLen)
-emaTrend = ta.ema(close, trendEmaLen)
+// --- DAILY BIAS (Macro Trend) ---
+dailyClose   = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+dailyEma50   = request.security(syminfo.tickerid, "D", ta.ema(close, 50)[1],  barmerge.gaps_off, barmerge.lookahead_off)
+dailyEma200  = request.security(syminfo.tickerid, "D", ta.ema(close, 200)[1], barmerge.gaps_off, barmerge.lookahead_off)
+dailyBullish = dailyClose > dailyEma50
+dailyBearish = dailyClose < dailyEma50
 
-// --- Trend Bias ---
-bullTrend = useTrendFilter ? close > emaTrend : true
-bearTrend = useTrendFilter ? close < emaTrend : true
+// --- HIGHER TF TREND (User Selected: 1H/4H/1D) ---
+htfClose     = request.security(syminfo.tickerid, htfTimeframe, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+htfEmaF      = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, htfEmaFast)[1], barmerge.gaps_off, barmerge.lookahead_off)
+htfEmaS      = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, htfEmaSlow)[1], barmerge.gaps_off, barmerge.lookahead_off)
+htfRsi       = request.security(syminfo.tickerid, htfTimeframe, ta.rsi(close, 14)[1], barmerge.gaps_off, barmerge.lookahead_off)
+htfBullish   = htfClose > htfEmaF and htfEmaF > htfEmaS
+htfBearish   = htfClose < htfEmaF and htfEmaF < htfEmaS
 
-// --- Pullback Entry (better R:R than raw crossover) ---
-// Long: in uptrend, fast EMA crosses up over slow EMA
-// Short: in downtrend, fast EMA crosses down under slow EMA
+// --- COMBINED HTF FILTERS ---
+longHtfOk  = (not useDailyBias or dailyBullish) and (not useHtfTrend or htfBullish)
+shortHtfOk = (not useDailyBias or dailyBearish) and (not useHtfTrend or htfBearish)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░ CHART TIMEFRAME CALCULATIONS ░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+
 emaBullCross = ta.crossover(emaFast, emaSlow)
 emaBearCross = ta.crossunder(emaFast, emaSlow)
 
-// --- RSI ---
 rsi = ta.rsi(close, rsiLen)
-
-// --- MACD ---
 [macdLine, signalLine, histLine] = ta.macd(close, macdFast, macdSlow, macdSignal)
 
-// --- ATR & Volatility ---
 atr      = ta.atr(atrLen)
 atrAvg   = ta.sma(atr, atrAvgLen)
 notExtreme = useVolatilityFilter ? (atr < atrAvg * atrSpikeMult) : true
 
-// --- ADX (DMI) ---
 [diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
 strongTrend = useAdxFilter ? (adxVal > adxMin) : true
 
-// --- Volume ---
 volMA = ta.sma(volume, volMaLen)
 volOk = useVolFilter ? (volume >= volMA * volMultiple) : true
 
-// --- Cooldown Tracking ---
+// --- Cooldown ---
 var int barsSinceExit = 1000
 if strategy.position_size != 0
     barsSinceExit := 0
@@ -123,19 +139,12 @@ else
     barsSinceExit := barsSinceExit + 1
 cooldownOk = useCooldown ? (barsSinceExit > cooldownBars) : true
 
-// --- Bar Counter (for time-based exit) ---
-var int barsInTrade = 0
-if strategy.position_size != 0
-    barsInTrade := barsInTrade + 1
-else
-    barsInTrade := 0
-
 // ══════════════════════════════════════════════════════════════════════════════
 // ░░░ ENTRY CONDITIONS ░░░
 // ══════════════════════════════════════════════════════════════════════════════
 
 longCondition = emaBullCross and 
-     bullTrend and 
+     longHtfOk and 
      rsi > rsiLongMin and rsi < rsiLongMax and 
      histLine > 0 and 
      strongTrend and 
@@ -146,7 +155,7 @@ longCondition = emaBullCross and
      tradeLong
 
 shortCondition = emaBearCross and 
-     bearTrend and 
+     shortHtfOk and 
      rsi > rsiShortMin and rsi < rsiShortMax and 
      histLine < 0 and 
      strongTrend and 
@@ -157,98 +166,139 @@ shortCondition = emaBearCross and
      tradeShort
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ░░░ SL / TP CALCULATION ░░░
+// ░░░ SL / TP CALCULATION (FIXED R:R) ░░░
 // ══════════════════════════════════════════════════════════════════════════════
 
 var float entryPrice = na
-var float currentSL = na
-var float currentTP1 = na
-var float currentTP2 = na
-var bool tp1Hit = false
+var float currentSL  = na
+var float currentTP  = na
+var bool  isLongTrade = false
+
+// Visual line/label refs
+var line  slLine    = na
+var line  tpLine    = na
+var line  entryLine = na
+var label slLabel   = na
+var label tpLabel   = na
+var label entryLabel = na
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ░░░ EXECUTE TRADES ░░░
 // ══════════════════════════════════════════════════════════════════════════════
 
 if longCondition and strategy.position_size == 0
+    slDist = atr * slMultiplier
+    tpDist = slDist * rrMult
     entryPrice := close
-    currentSL  := close - (atr * slMultiplier)
-    currentTP1 := close + (atr * tp1Multiplier)
-    currentTP2 := close + (atr * tp2Multiplier)
-    tp1Hit     := false
+    currentSL  := close - slDist
+    currentTP  := close + tpDist
+    isLongTrade := true
     strategy.entry("Long", strategy.long)
 
 if shortCondition and strategy.position_size == 0
+    slDist = atr * slMultiplier
+    tpDist = slDist * rrMult
     entryPrice := close
-    currentSL  := close + (atr * slMultiplier)
-    currentTP1 := close - (atr * tp1Multiplier)
-    currentTP2 := close - (atr * tp2Multiplier)
-    tp1Hit     := false
+    currentSL  := close + slDist
+    currentTP  := close - tpDist
+    isLongTrade := false
     strategy.entry("Short", strategy.short)
 
-// --- Detect TP1 hit and move SL to breakeven (trailing) ---
-if useTrailingStop and strategy.position_size > 0 and not tp1Hit
-    if high >= currentTP1
-        tp1Hit := true
-        currentSL := entryPrice  // move SL to breakeven
-
-if useTrailingStop and strategy.position_size < 0 and not tp1Hit
-    if low <= currentTP1
-        tp1Hit := true
-        currentSL := entryPrice  // move SL to breakeven
-
-// --- Place Exit Orders (always-active brackets) ---
 if strategy.position_size > 0
-    strategy.exit("L-TP1", from_entry="Long", qty_percent=50, stop=currentSL, limit=currentTP1)
-    strategy.exit("L-TP2", from_entry="Long", stop=currentSL, limit=currentTP2)
+    strategy.exit("Long-Exit", from_entry="Long", stop=currentSL, limit=currentTP)
 
 if strategy.position_size < 0
-    strategy.exit("S-TP1", from_entry="Short", qty_percent=50, stop=currentSL, limit=currentTP1)
-    strategy.exit("S-TP2", from_entry="Short", stop=currentSL, limit=currentTP2)
-
-// --- Time-Based Exit (force close after N bars) ---
-if useTimeExit and barsInTrade >= maxBarsInTrade and strategy.position_size != 0
-    strategy.close_all(comment="Time Exit")
+    strategy.exit("Short-Exit", from_entry="Short", stop=currentSL, limit=currentTP)
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ░░░ PLOTS & VISUALS ░░░
+// ░░░ DRAW SL / TP / ENTRY LINES & LABELS ░░░
 // ══════════════════════════════════════════════════════════════════════════════
 
-plot(emaFast,  "Fast EMA",  color=color.new(color.green, 0), linewidth=2)
-plot(emaSlow,  "Slow EMA",  color=color.new(color.red, 0),   linewidth=2)
-plot(useTrendFilter ? emaTrend : na, "Trend EMA 200", color=color.new(color.blue, 0), linewidth=2)
+drawTradeLines(float ePrice, float sl, float tp, bool isLong) =>
+    if showLines
+        line.delete(slLine)
+        line.delete(tpLine)
+        line.delete(entryLine)
+        slLine    := line.new(bar_index, sl,     bar_index + 1, sl,     extend=extend.right, color=color.new(color.red, 0),    width=2, style=line.style_solid)
+        tpLine    := line.new(bar_index, tp,     bar_index + 1, tp,     extend=extend.right, color=color.new(color.green, 0),  width=2, style=line.style_solid)
+        entryLine := line.new(bar_index, ePrice, bar_index + 1, ePrice, extend=extend.right, color=color.new(color.blue, 0),   width=1, style=line.style_dashed)
+    if showLabels
+        label.delete(slLabel)
+        label.delete(tpLabel)
+        label.delete(entryLabel)
+        slLabel    := label.new(bar_index, sl,     "SL: "    + str.tostring(sl,     format.mintick), style=label.style_label_left, color=color.new(color.red, 0),   textcolor=color.white, size=size.small)
+        tpLabel    := label.new(bar_index, tp,     "TP: "    + str.tostring(tp,     format.mintick) + "  (" + rrChoice + ")", style=label.style_label_left, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+        entryLabel := label.new(bar_index, ePrice, "Entry: " + str.tostring(ePrice, format.mintick) + (isLong ? " LONG" : " SHORT"), style=label.style_label_left, color=color.new(color.blue, 0), textcolor=color.white, size=size.small)
 
-plotshape(longCondition,  "Long Signal",  shape.triangleup,   location.belowbar, color=color.new(color.green, 0), size=size.small, text="LONG")
-plotshape(shortCondition, "Short Signal", shape.triangledown, location.abovebar, color=color.new(color.red, 0),   size=size.small, text="SHORT")
+if longCondition and strategy.position_size == 0
+    drawTradeLines(close, close - atr * slMultiplier, close + atr * slMultiplier * rrMult, true)
 
-plot(strategy.position_size != 0 ? currentSL  : na, "Stop Loss",    color=color.new(color.red, 30),    style=plot.style_linebr, linewidth=1)
-plot(strategy.position_size != 0 ? currentTP1 : na, "Take Profit 1", color=color.new(color.yellow, 30), style=plot.style_linebr, linewidth=1)
-plot(strategy.position_size != 0 ? currentTP2 : na, "Take Profit 2", color=color.new(color.green, 30),  style=plot.style_linebr, linewidth=1)
+if shortCondition and strategy.position_size == 0
+    drawTradeLines(close, close + atr * slMultiplier, close - atr * slMultiplier * rrMult, false)
 
-bgcolor(strategy.position_size > 0 ? color.new(color.green, 95) : 
-     strategy.position_size < 0 ? color.new(color.red, 95) : na)
+// Clear lines once trade closes
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    line.delete(slLine)
+    line.delete(tpLine)
+    line.delete(entryLine)
+    label.delete(slLabel)
+    label.delete(tpLabel)
+    label.delete(entryLabel)
 
-// --- Info Table ---
-var table infoTable = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 80), border_width=1)
-if barstate.islast
-    table.cell(infoTable, 0, 0, "Metric",       text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 0, "Value",        text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 0, 1, "Net Profit",   text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 1, str.tostring(strategy.netprofit, "#.##"), text_color=strategy.netprofit > 0 ? color.green : color.red, text_size=size.small)
-    table.cell(infoTable, 0, 2, "Win Rate %",   text_color=color.white, text_size=size.small)
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░ PLOTS ░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+plot(emaFast, "Fast EMA", color=color.new(color.green, 0), linewidth=2)
+plot(emaSlow, "Slow EMA", color=color.new(color.red,   0), linewidth=2)
+
+plotshape(longCondition,  "Long Signal",  shape.triangleup,   location.belowbar, color=color.new(color.green, 0), size=size.normal, text="LONG")
+plotshape(shortCondition, "Short Signal", shape.triangledown, location.abovebar, color=color.new(color.red,   0), size=size.normal, text="SHORT")
+
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 95) : strategy.position_size < 0 ? color.new(color.red, 95) : na)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ░░░ TOP-DOWN ANALYSIS TABLE ░░░
+// ══════════════════════════════════════════════════════════════════════════════
+
+var table topDownTable = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 75), border_width=1, border_color=color.gray)
+
+if barstate.islast and showHtfTable
+    table.cell(topDownTable, 0, 0, "TOP-DOWN ANALYSIS", text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 50))
+    table.cell(topDownTable, 1, 0, syminfo.ticker,       text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 50))
+
+    table.cell(topDownTable, 0, 1, "Daily Bias",  text_color=color.white, text_size=size.small)
+    table.cell(topDownTable, 1, 1, dailyBullish ? "BULL" : dailyBearish ? "BEAR" : "NEUTRAL", text_color=dailyBullish ? color.green : dailyBearish ? color.red : color.gray, text_size=size.small)
+
+    htfLabel = htfTimeframe == "60" ? "1H Trend" : htfTimeframe == "240" ? "4H Trend" : htfTimeframe == "D" ? "Daily Trend" : htfTimeframe + " Trend"
+    table.cell(topDownTable, 0, 2, htfLabel, text_color=color.white, text_size=size.small)
+    table.cell(topDownTable, 1, 2, htfBullish ? "BULL" : htfBearish ? "BEAR" : "NEUTRAL", text_color=htfBullish ? color.green : htfBearish ? color.red : color.gray, text_size=size.small)
+
+    table.cell(topDownTable, 0, 3, "HTF RSI",  text_color=color.white, text_size=size.small)
+    table.cell(topDownTable, 1, 3, str.tostring(htfRsi, "#.#"), text_color=htfRsi > 50 ? color.green : color.red, text_size=size.small)
+
+    chartTfLabel = timeframe.period == "15" ? "15m Signal" : timeframe.period == "60" ? "1H Signal" : timeframe.period + " Signal"
+    table.cell(topDownTable, 0, 4, chartTfLabel, text_color=color.white, text_size=size.small)
+    sigText = strategy.position_size > 0 ? "IN LONG" : strategy.position_size < 0 ? "IN SHORT" : longHtfOk ? "WAIT LONG" : shortHtfOk ? "WAIT SHORT" : "NO TRADE"
+    sigColor = strategy.position_size > 0 ? color.green : strategy.position_size < 0 ? color.red : color.gray
+    table.cell(topDownTable, 1, 4, sigText, text_color=sigColor, text_size=size.small)
+
+    table.cell(topDownTable, 0, 5, "ADX", text_color=color.white, text_size=size.small)
+    table.cell(topDownTable, 1, 5, str.tostring(adxVal, "#.#") + (adxVal > adxMin ? " ok" : " low"), text_color=adxVal > adxMin ? color.green : color.red, text_size=size.small)
+
+    table.cell(topDownTable, 0, 6, "R:R Ratio", text_color=color.white, text_size=size.small)
+    table.cell(topDownTable, 1, 6, rrChoice,    text_color=color.aqua,  text_size=size.small)
+
+    table.cell(topDownTable, 0, 7, "Net Profit", text_color=color.white, text_size=size.small)
+    table.cell(topDownTable, 1, 7, str.tostring(strategy.netprofit, "#.##"), text_color=strategy.netprofit > 0 ? color.green : color.red, text_size=size.small)
+
     winRate = strategy.closedtrades > 0 ? (strategy.wintrades / strategy.closedtrades) * 100 : 0
-    table.cell(infoTable, 1, 2, str.tostring(winRate, "#.##") + "%", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 0, 3, "Profit Factor", text_color=color.white, text_size=size.small)
-    pf = strategy.grossloss != 0 ? math.abs(strategy.grossprofit / strategy.grossloss) : 0
-    table.cell(infoTable, 1, 3, str.tostring(pf, "#.##"), text_color=pf > 1 ? color.green : color.red, text_size=size.small)
-    table.cell(infoTable, 0, 4, "Total Trades", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 4, str.tostring(strategy.closedtrades), text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 0, 5, "Max Drawdown", text_color=color.white, text_size=size.small)
-    table.cell(infoTable, 1, 5, str.tostring(strategy.max_drawdown, "#.##"), text_color=color.red, text_size=size.small)
+    table.cell(topDownTable, 0, 8, "Win % / Trades", text_color=color.white, text_size=size.small)
+    table.cell(topDownTable, 1, 8, str.tostring(winRate, "#.#") + "% / " + str.tostring(strategy.closedtrades), text_color=color.white, text_size=size.small)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ░░░ ALERTS ░░░
 // ══════════════════════════════════════════════════════════════════════════════
 
-alertcondition(longCondition,  "Long Entry",  "LONG: {{ticker}} @ {{close}} | SL/TP set via ATR")
-alertcondition(shortCondition, "Short Entry", "SHORT: {{ticker}} @ {{close}} | SL/TP set via ATR")
+alertcondition(longCondition,  "Long Entry",  "LONG: {{ticker}} @ {{close}} | Top-down aligned | R:R locked")
+alertcondition(shortCondition, "Short Entry", "SHORT: {{ticker}} @ {{close}} | Top-down aligned | R:R locked")
