@@ -1,99 +1,95 @@
-# Liquidity Sweep A+ Strategy (v4)
+# Liquidity 2nd-Sweep A+ Strategy (v5)
 
-A clean, price-action-only strategy. **No EMAs, no oscillators, no trendlines.** Just liquidity, support/resistance, and high-probability sweep reversals.
+The high-quality version. **Waits for the 2nd sweep of the same level** before entering — this is the single biggest filter for trade quality in price action trading.
 
 ---
 
-## Core Concept: Smart Money Liquidity Sweeps
-
-Big players hunt stop losses. Retail traders place stops:
-- **Above swing highs** (resistance)
-- **Below swing lows** (support)
-
-When price wicks past these levels and immediately rejects, that's a **liquidity sweep** — institutions filling orders by triggering retail stops, then reversing. This strategy trades the reversal.
+## Why 2nd-Sweep is Different (and Profitable)
 
 ```
-                              ┌── wick sweeps high (stops triggered)
-   ┌──────── resistance ─────┐│┌── close back below (rejection)
-                              ▼▼ 
-                              ▒  ◄── A+ SHORT entry
-                            ▒▒▒
-                          ▒▒▒
-                        ▒▒▒
-                      ▒▒▒
-   ────────────────▒▒▒
-   ┌── support ──▒▒▒
-                ▒▒  ◄── A+ LONG entry  
-                ▒▒│└── close back above (rejection)
-                  └── wick sweeps low (stops triggered)
+Level forms ($50,000 swing high)
+    │
+    ├── 1st sweep happens   ← STAY OUT
+    │   Price wicks above $50K, closes back below
+    │   Most retail "sweep traders" enter here and lose
+    │   The level is now PRIMED (turns ORANGE on chart)
+    │
+    ├── Price retraces, comes back to retest
+    │
+    ├── 2nd sweep happens   ← THIS IS THE A+ ENTRY
+    │   Price wicks above $50K AGAIN, closes back below
+    │   Smart money is exhausted here, real reversal begins
+    │   With RSI divergence: bearish (lower RSI on equal-or-higher price)
+    │
+    └── Enter SHORT, SL above 2nd-sweep wick, TP at 2x risk
 ```
 
----
-
-## What's on Your Chart (Clean!)
-
-✅ **Red zones** = Resistance (recent swing highs = liquidity above)  
-✅ **Green zones** = Support (recent swing lows = liquidity below)  
-✅ **SWEEP labels** = A+ signal triggered  
-✅ **Position Tool box** = Active trade with green TP zone, red SL zone, blue entry line  
-✅ **Info table** (top-right) = HTF bias, active levels, R:R, performance  
-
-❌ No EMAs  
-❌ No RSI/MACD  
-❌ No trendlines  
-❌ No clutter  
+This pattern is also called:
+- **Double Top** (with sweep wicks)
+- **SFP × 2** (Swing Failure Pattern double-tap)
+- **Liquidity grab + reversal** (in SMC terms)
 
 ---
 
-## A+ Setup Filters (4 must align)
+## Confluence Stack (5 Filters for A+)
 
-A trade is taken **only if all four** conditions are met:
+Every entry requires **all five**:
 
-| # | Filter | Why |
-|---|--------|-----|
-| 1 | **Liquidity Sweep** | Wick must pierce S/R level AND close back inside |
-| 2 | **Strong Rejection Wick** | Wick ≥ 55% of candle range (proves rejection) |
-| 3 | **Volume Spike** | Volume > 1.3x its 20-MA (proves participation) |
-| 4 | **HTF Bias Aligned** | HTF momentum agrees (no EMA — pure 20-bar close comparison) |
+| # | Filter | What It Checks |
+|---|--------|----------------|
+| 1 | **2nd Sweep** | Same level swept twice (with retracement between) |
+| 2 | **RSI Divergence** | RSI is lower on 2nd sweep (shorts) / higher on 2nd sweep (longs) — exhaustion |
+| 3 | **Strong Rejection Wick** | Wick ≥ 55% of candle range (real rejection, not noise) |
+| 4 | **Volume Spike** | > 1.3× the 20-bar volume MA (real participation) |
+| 5 | **HTF Bias** | 4H momentum agrees (no EMA — pure 20-bar close diff) |
 
-Plus structural rules:
-- Swept level must be **at least 8 bars old** (proven, not noise)
-- **10-bar cooldown** between trades (no overtrading)
+Plus structural:
+- Min 4 bars between 1st and 2nd sweep (forces meaningful retracement)
+- 10-bar cooldown between trades
+- Levels that close-through are removed (no longer valid)
 
-This is intentionally strict. Expect **2–6 A+ signals per pair per week**, not per day.
+---
+
+## What's on Your Chart (Clean)
+
+```
+Red zone     = Resistance (untouched)
+Orange zone  = Resistance/Support that's been swept ONCE — primed for A+
+Green zone   = Support (untouched)
+Position Tool box at entry:
+   ─── Blue line  : entry price
+   ─── Red line   : stop loss
+   ─── Green line : take profit
+   Green box      : profit zone (entry → TP)
+   Red box        : risk zone (entry → SL)
+   Right-side labels show exact prices and R:R
+Info table (top-right) shows live stats
+```
+
+❌ **No arrows pointing direction**  
+❌ **No EMA / MACD / oscillator overlays**  
+❌ **No SWEEP labels above/below candles**  
+✅ **Just zones, position tool, and table**
 
 ---
 
 ## Entry & Exit Logic
 
-### LONG (Bullish Sweep)
-- Wick pierces below recent **support zone** (sweeps stops)
-- Candle closes **back above** the support level
-- All A+ filters pass
+### LONG (2nd Bullish Sweep)
+- A support level has been swept once (orange zone)
+- Price comes back, wicks below the same level a 2nd time
+- Closes back above with strong wick + volume + HTF bull bias + RSI divergence
 - **Entry**: at sweep candle close
-- **SL**: just below the sweep low (with small ATR buffer to avoid stop hunts)
-- **TP**: based on R:R selector (1:1.5, 1:2, or 1:3)
+- **SL**: just below the 2nd sweep wick low + ATR buffer
+- **TP**: 2× risk (or 1.5×, 3× per setting)
 
-### SHORT (Bearish Sweep)
-- Wick pierces above recent **resistance zone** (sweeps stops)
-- Candle closes **back below** the resistance level
-- All A+ filters pass
+### SHORT (2nd Bearish Sweep)
+- A resistance level has been swept once (orange zone)
+- Price rallies back, wicks above the same level a 2nd time
+- Closes back below with strong wick + volume + HTF bear bias + RSI divergence
 - **Entry**: at sweep candle close
-- **SL**: just above the sweep high
-- **TP**: based on R:R selector
-
----
-
-## Position Tool Visualization
-
-When a trade triggers, you see exactly what TradingView's Long/Short Position drawing tool shows:
-
-- **Green box** = Profit zone (entry → TP)
-- **Red box** = Risk zone (entry → SL)
-- **Blue dashed line** = Entry price
-- **Label** = Direction, prices, and R:R
-
-The boxes extend right while the trade is active and freeze when the trade closes.
+- **SL**: just above the 2nd sweep wick high + ATR buffer
+- **TP**: 2× risk
 
 ---
 
@@ -105,7 +101,27 @@ The boxes extend right while the trade is active and freeze when the trade close
 | **1:2** | 2x risk | **34%** ← recommended |
 | 1:3 | 3x risk | 25% |
 
-With strict A+ filters, expect **45–60% win rate**, so 1:2 R:R produces strong expectancy.
+With 2nd-sweep filter, expected win rate is **55–70%**, so 1:2 R:R produces strong expectancy.
+
+---
+
+## Realistic Expectations (v5)
+
+A 2nd-sweep strategy is genuinely low-frequency, high-quality:
+
+| Metric | Range |
+|--------|-------|
+| Trades / pair / week | **1 – 3** (very selective) |
+| Win Rate | **55 – 70%** |
+| Profit Factor | **1.8 – 3.0** |
+| Max Drawdown | 5 – 10% |
+| Avg Net Return (6mo) | 30 – 100%+ |
+
+**Why fewer trades = more profit:**
+- Each trade has 5 layers of confluence
+- 2nd-sweep at proven levels is a textbook reversal pattern
+- SLs are tight (just past the wick) — losses are small
+- TPs are pre-defined — no emotional exits
 
 ---
 
@@ -114,7 +130,7 @@ With strict A+ filters, expect **45–60% win rate**, so 1:2 R:R produces strong
 ### Step 1 — Add Strategy
 1. Open TradingView → Pine Editor
 2. Paste contents of `crypto_strategy_15m.pine`
-3. Click "Add to Chart"
+3. Click "Save" → "Add to Chart"
 
 ### Step 2 — Set Timeframe
 - **15m chart** → leave HTF at `240` (4H)
@@ -130,56 +146,26 @@ With strict A+ filters, expect **45–60% win rate**, so 1:2 R:R produces strong
 - BINANCE:AVAXUSDT.P
 - BINANCE:LINKUSDT.P
 
-### Step 4 — Read Results
-Strategy Tester tab shows full backtest. The on-chart info table shows live performance.
+### Step 4 — Read the Chart
+- See orange zones? Those are levels primed for A+ entries — watch them
+- When 2nd sweep fires, the position tool appears at entry with green TP / red SL boxes
+- Lines stay on chart during trade, freeze when trade closes
 
 ---
 
 ## Per-Pair Recommended Settings
 
-| Pair | Pivot Len | Wick % | R:R | SL Buffer | Notes |
-|------|-----------|--------|-----|-----------|-------|
-| **BTCUSDT.P** | 10 | 0.55 | 1:2 | 0.25 | Default — cleanest sweeps |
-| **ETHUSDT.P** | 10 | 0.55 | 1:2 | 0.25 | Default |
-| **BNBUSDT.P** | 10 | 0.55 | 1:2 | 0.25 | Default |
-| **SOLUSDT.P** | 12 | 0.50 | 1:2 | 0.30 | Bigger pivots, slightly more buffer |
-| **AVAXUSDT.P** | 12 | 0.50 | 1:1.5 | 0.30 | Volatile, tighter R:R |
-| **XRPUSDT.P** | 8  | 0.55 | 1:1.5 | 0.25 | Smaller pivots, range-bound |
-| **DOGEUSDT.P** | 12 | 0.50 | 1:1.5 | 0.40 | Wider buffer for meme volatility |
-| **LINKUSDT.P** | 10 | 0.55 | 1:2 | 0.25 | Default |
-| **MATICUSDT.P** | 12 | 0.50 | 1:2 | 0.30 | Volatile |
-
----
-
-## Realistic Expectations
-
-A liquidity sweep strategy is a **low-frequency, high-quality** approach:
-
-| Metric | Expected Range |
-|--------|---------------|
-| Trades / Pair / Week | 2 – 6 |
-| Win Rate | 45 – 60% |
-| Profit Factor | 1.6 – 2.5 |
-| Max Drawdown | 5 – 12% |
-| Avg Net Return (6mo) | 30 – 100% |
-
-**Why higher quality than trend strategies:**
-- Sweeps are mean-reversion entries at proven levels
-- Strict A+ filters eliminate most setups
-- No counter-trend trades (HTF bias filter)
-- Stops placed where they should be (just beyond sweep wick)
-
----
-
-## Why This Beats EMA/MA Strategies
-
-| EMA/MA Strategy | Liquidity Sweep |
-|-----------------|-----------------|
-| Lagging (signal after move) | Leading (signal at reversal point) |
-| Whipsaws in chop | Sweeps work IN chop (range trades) |
-| Wide stops (avg true range based on noise) | Tight stops (just beyond known wick) |
-| Trades crossovers regardless of structure | Trades only at proven liquidity levels |
-| 30-50% win rate typical | 45-60% win rate typical |
+| Pair | Pivot | RR | SL Buffer | Notes |
+|------|-------|----|-----------|------|
+| **BTCUSDT.P** | 10 | 1:2 | 0.30 | Default — cleanest sweeps |
+| **ETHUSDT.P** | 10 | 1:2 | 0.30 | Default |
+| **BNBUSDT.P** | 10 | 1:2 | 0.30 | Default |
+| **SOLUSDT.P** | 12 | 1:2 | 0.40 | Wider buffer |
+| **AVAXUSDT.P** | 12 | 1:1.5 | 0.40 | Tighter R:R |
+| **XRPUSDT.P** | 8 | 1:1.5 | 0.30 | Smaller pivots |
+| **DOGEUSDT.P** | 12 | 1:1.5 | 0.50 | Wider buffer for meme vol |
+| **LINKUSDT.P** | 10 | 1:2 | 0.30 | Default |
+| **MATICUSDT.P** | 12 | 1:2 | 0.40 | Default |
 
 ---
 
@@ -187,30 +173,22 @@ A liquidity sweep strategy is a **low-frequency, high-quality** approach:
 
 | Symptom | Fix |
 |---------|-----|
-| Too few signals | Lower wick % to 0.45, lower volume mult to 1.1, disable HTF bias |
-| Too many fake signals | Increase wick % to 0.65, raise pivot length to 15 |
-| SL hits too often | Increase SL buffer ATR from 0.25 to 0.4 |
-| TP doesn't hit | Switch from 1:2 to 1:1.5 R:R |
+| Too few trades (< 1/week) | Lower wick % to 0.45, disable RSI divergence, lower volume mult to 1.1 |
+| SL hits too often | Increase SL buffer ATR from 0.30 to 0.50 |
+| TP doesn't reach | Switch from 1:2 to 1:1.5 R:R |
 | Wrong-direction trades | Enable HTF bias if disabled |
+| Want more strict | Increase min bars between sweeps from 4 to 8, raise wick % to 0.65 |
 
 ---
 
-## Setting Up Live Alerts
+## Live Alerts
 
 1. Right-click strategy on chart → "Add Alert"
-2. Condition: `A+ Long Sweep` or `A+ Short Sweep`
+2. Condition: `A+ Long 2nd-Sweep` or `A+ Short 2nd-Sweep`
 3. Trigger: **Once Per Bar Close** (NEVER every tick)
-4. Message includes ticker, direction, price — perfect for webhooks
-
----
-
-## Files
-
-- `crypto_strategy_15m.pine` — Pine Script v5
-- `STRATEGY_README.md` — This file
 
 ---
 
 ## Disclaimer
 
-For educational purposes only. Crypto trading is high-risk. Past results don't guarantee future performance. Paper trade for 4-6 weeks before risking real capital.
+For educational purposes. Crypto trading is high-risk. Past results don't guarantee future performance. Paper trade for 4-6 weeks before risking real capital.

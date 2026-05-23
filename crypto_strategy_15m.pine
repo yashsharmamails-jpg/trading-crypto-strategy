@@ -2,7 +2,7 @@
 // https://mozilla.org/MPL/2.0/
 
 //@version=5
-strategy("Liquidity Sweep A+ Strategy v4.1", 
+strategy("Liquidity 2nd-Sweep A+ Strategy v5", 
      overlay=true, 
      default_qty_type=strategy.percent_of_equity, 
      default_qty_value=10,
@@ -13,35 +13,42 @@ strategy("Liquidity Sweep A+ Strategy v4.1",
      pyramiding=0,
      calc_on_every_tick=false,
      process_orders_on_close=true,
-     max_boxes_count=200,
-     max_lines_count=200,
-     max_labels_count=200)
+     max_boxes_count=300,
+     max_lines_count=300,
+     max_labels_count=300)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // INPUTS
 // ══════════════════════════════════════════════════════════════════════════════
 
-// --- Pivot / S/R Zone Settings ---
-pivotLen         = input.int(10, "Pivot Lookback (bars)", minval=3, group="Support/Resistance")
-maxZones         = input.int(4,  "Max Active Zones (each side)", minval=1, maxval=10, group="Support/Resistance")
-zoneThicknessAtr = input.float(0.20, "Zone Thickness (x ATR)", minval=0.05, step=0.05, group="Support/Resistance")
-minLevelAge      = input.int(8,  "Min Level Age (bars) for A+", minval=3, group="Support/Resistance")
+// --- 2nd-Sweep Logic (the A+ rule) ---
+requireSecondSweep   = input.bool(true, "REQUIRE 2nd Sweep (A+ rule)", group="A+ Setup",
+     tooltip="Skip 1st sweeps. Only enter when the SAME level is swept a 2nd time. This is the entire reason this strategy works.")
+minBarsBetweenSweeps = input.int(4, "Min Bars Between 1st & 2nd Sweep", minval=1, group="A+ Setup",
+     tooltip="Forces price to retrace meaningfully before 2nd sweep counts.")
 
-// --- A+ Quality Filters ---
-useWickFilter = input.bool(true,  "Strong Rejection Wick (A+)", group="A+ Filters")
-wickPct       = input.float(0.55, "Min Rejection Wick %", minval=0.30, maxval=0.85, step=0.05, group="A+ Filters")
-useVolFilter  = input.bool(true,  "Volume Spike on Sweep (A+)", group="A+ Filters")
-volMult       = input.float(1.3,  "Min Volume vs 20-MA", minval=1.0, step=0.1, group="A+ Filters")
-useHtfBias    = input.bool(true,  "HTF Bias Filter (A+)", group="A+ Filters")
-htfTF         = input.timeframe("240", "Higher Timeframe", options=["60","120","240","D"], group="A+ Filters")
-htfLookback   = input.int(20, "HTF Momentum Lookback (bars)", minval=5, group="A+ Filters")
+// --- Pivot / S/R Zones ---
+pivotLen         = input.int(10, "Pivot Lookback (bars)", minval=3, group="Support/Resistance")
+maxZones         = input.int(6,  "Max Active Zones (each side)", minval=2, maxval=12, group="Support/Resistance")
+zoneThicknessAtr = input.float(0.20, "Zone Thickness (x ATR)", minval=0.05, step=0.05, group="Support/Resistance")
+
+// --- A+ Confluence Filters ---
+useWickFilter = input.bool(true,  "Strong Rejection Wick", group="A+ Confluence")
+wickPct       = input.float(0.55, "Min Rejection Wick %", minval=0.30, maxval=0.85, step=0.05, group="A+ Confluence")
+useVolFilter  = input.bool(true,  "Volume Spike on Sweep", group="A+ Confluence")
+volMult       = input.float(1.3,  "Min Volume vs 20-MA",  minval=1.0, step=0.1, group="A+ Confluence")
+useHtfBias    = input.bool(true,  "HTF Momentum Bias",    group="A+ Confluence")
+htfTF         = input.timeframe("240", "Higher Timeframe", options=["60","120","240","D"], group="A+ Confluence")
+htfLookback   = input.int(20, "HTF Lookback (bars)", minval=5, group="A+ Confluence")
+useRsiDiv     = input.bool(true,  "RSI Divergence on 2nd Sweep", group="A+ Confluence",
+     tooltip="On 2nd sweep, RSI must show divergence from price (lower-high RSI on bearish sweep / higher-low on bullish). Strong A+ confirmation.")
 
 // --- Risk:Reward ---
 rrChoice = input.string("1:2", "Risk:Reward", options=["1:1.5","1:2","1:3"], group="Risk:Reward")
 rrMult   = rrChoice == "1:3" ? 3.0 : rrChoice == "1:2" ? 2.0 : 1.5
 
 // --- Stop Loss Buffer ---
-slBufferAtr = input.float(0.25, "SL Buffer beyond Sweep Wick (x ATR)", minval=0.0, step=0.05, group="Stop Loss")
+slBufferAtr = input.float(0.30, "SL Buffer beyond Sweep Wick (x ATR)", minval=0.0, step=0.05, group="Stop Loss")
 
 // --- Trade Direction ---
 tradeLong  = input.bool(true, "Allow Long Trades",  group="Trade Direction")
@@ -50,9 +57,10 @@ tradeShort = input.bool(true, "Allow Short Trades", group="Trade Direction")
 // --- Cooldown ---
 cooldownBars = input.int(10, "Cooldown Between Trades (bars)", minval=0, group="Cooldown")
 
-// --- Visuals ---
+// --- Visuals (clean) ---
 showZones        = input.bool(true, "Show S/R Zones",            group="Visuals")
-showSweepMarks   = input.bool(true, "Show Liquidity Sweep Marks", group="Visuals")
+showSweepStatus  = input.bool(true, "Mark Once-Swept Zones (orange)", group="Visuals",
+     tooltip="Levels that have been swept once turn orange — these are the levels we're hunting for 2nd sweep.")
 showPositionTool = input.bool(true, "Show Position Tool Boxes",  group="Visuals")
 showInfoTable    = input.bool(true, "Show Info Table",            group="Visuals")
 
@@ -67,106 +75,178 @@ inDateRange = time >= startDate and time <= endDate
 
 atr   = ta.atr(14)
 volMA = ta.sma(volume, 20)
+rsi   = ta.rsi(close, 14)
 
-// --- HTF Momentum Bias (no EMA — pure price comparison) ---
-// Use one security() call returning a series, then look back on the result.
+// HTF Momentum Bias (no EMA — pure price comparison)
 htfClose     = request.security(syminfo.tickerid, htfTF, close[1], lookahead=barmerge.lookahead_off)
 htfClosePast = htfClose[htfLookback]
 htfBull = not na(htfClose) and not na(htfClosePast) and htfClose > htfClosePast
 htfBear = not na(htfClose) and not na(htfClosePast) and htfClose < htfClosePast
 
-// --- Pivot detection (defines swing highs/lows = liquidity pools) ---
+// Pivots (define liquidity pools)
 ph = ta.pivothigh(high, pivotLen, pivotLen)
 pl = ta.pivotlow(low,  pivotLen, pivotLen)
 
 // ══════════════════════════════════════════════════════════════════════════════
-// MANAGE S/R ZONES (boxes)
+// MANAGE S/R LEVELS WITH SWEEP COUNTERS
 // ══════════════════════════════════════════════════════════════════════════════
 
-var array<float> resLevels = array.new<float>()
-var array<int>   resBars   = array.new<int>()
-var array<box>   resBoxes  = array.new<box>()
+// Each level tracks: price, original pivot bar, sweep count, last sweep bar, RSI@1stSweep, box ref
+var array<float> resLevels       = array.new<float>()
+var array<int>   resBars         = array.new<int>()
+var array<int>   resSweepCount   = array.new<int>()
+var array<int>   resLastSweepBar = array.new<int>()
+var array<float> resFirstRsi     = array.new<float>()
+var array<box>   resBoxes        = array.new<box>()
 
-var array<float> supLevels = array.new<float>()
-var array<int>   supBars   = array.new<int>()
-var array<box>   supBoxes  = array.new<box>()
+var array<float> supLevels       = array.new<float>()
+var array<int>   supBars         = array.new<int>()
+var array<int>   supSweepCount   = array.new<int>()
+var array<int>   supLastSweepBar = array.new<int>()
+var array<float> supFirstRsi     = array.new<float>()
+var array<box>   supBoxes        = array.new<box>()
 
-// Add new resistance zone when pivot high confirmed
+// Add new resistance on confirmed pivot high
 if not na(ph)
     pivotBar = bar_index - pivotLen
     array.push(resLevels, ph)
     array.push(resBars,   pivotBar)
+    array.push(resSweepCount, 0)
+    array.push(resLastSweepBar, -1000)
+    array.push(resFirstRsi, na)
     if showZones
         zoneTop = ph + atr * zoneThicknessAtr * 0.5
         zoneBot = ph - atr * zoneThicknessAtr * 0.5
-        newBox = box.new(pivotBar, zoneTop, bar_index, zoneBot, bgcolor=color.new(color.red, 88), border_color=color.new(color.red, 60), border_width=1, extend=extend.right)
-        array.push(resBoxes, newBox)
+        nb = box.new(pivotBar, zoneTop, bar_index, zoneBot, bgcolor=color.new(color.red, 88), border_color=color.new(color.red, 60), border_width=1, extend=extend.right)
+        array.push(resBoxes, nb)
     while array.size(resLevels) > maxZones
         array.shift(resLevels)
         array.shift(resBars)
+        array.shift(resSweepCount)
+        array.shift(resLastSweepBar)
+        array.shift(resFirstRsi)
         if array.size(resBoxes) > 0
             box.delete(array.shift(resBoxes))
 
-// Add new support zone when pivot low confirmed
+// Add new support on confirmed pivot low
 if not na(pl)
     pivotBar = bar_index - pivotLen
     array.push(supLevels, pl)
     array.push(supBars,   pivotBar)
+    array.push(supSweepCount, 0)
+    array.push(supLastSweepBar, -1000)
+    array.push(supFirstRsi, na)
     if showZones
         zoneTop = pl + atr * zoneThicknessAtr * 0.5
         zoneBot = pl - atr * zoneThicknessAtr * 0.5
-        newBox = box.new(pivotBar, zoneTop, bar_index, zoneBot, bgcolor=color.new(color.green, 88), border_color=color.new(color.green, 60), border_width=1, extend=extend.right)
-        array.push(supBoxes, newBox)
+        nb = box.new(pivotBar, zoneTop, bar_index, zoneBot, bgcolor=color.new(color.green, 88), border_color=color.new(color.green, 60), border_width=1, extend=extend.right)
+        array.push(supBoxes, nb)
     while array.size(supLevels) > maxZones
         array.shift(supLevels)
         array.shift(supBars)
+        array.shift(supSweepCount)
+        array.shift(supLastSweepBar)
+        array.shift(supFirstRsi)
         if array.size(supBoxes) > 0
             box.delete(array.shift(supBoxes))
 
 // ══════════════════════════════════════════════════════════════════════════════
-// FIND ACTIVE LEVELS (most recent qualifying — old enough)
+// DETECT SWEEPS & COUNT (THE A+ LOGIC)
 // ══════════════════════════════════════════════════════════════════════════════
 
-// We iterate forward through the array and let the LAST qualifying level win.
-// This avoids reverse-iteration issues in Pine v5 for loops.
+bool aplusShortSignal = false
+bool aplusLongSignal  = false
+float sweepLevelShort = na
+float sweepLevelLong  = na
 
-float activeRes = na
+// --- Resistance: bearish sweeps ---
 if array.size(resLevels) > 0
     for i = 0 to array.size(resLevels) - 1
-        l = array.get(resLevels, i)
-        b = array.get(resBars, i)
-        if (bar_index - b) >= minLevelAge
-            activeRes := l
+        level = array.get(resLevels, i)
+        cnt   = array.get(resSweepCount, i)
+        lastB = array.get(resLastSweepBar, i)
+        // Sweep event: wick above level, close back below, prior bar's high was below
+        sweepEvent = high > level and close < level and high[1] <= level and (bar_index - lastB) >= minBarsBetweenSweeps
+        if sweepEvent
+            newCnt = cnt + 1
+            array.set(resSweepCount, i, newCnt)
+            array.set(resLastSweepBar, i, bar_index)
+            if newCnt == 1
+                array.set(resFirstRsi, i, rsi)
+                // Mark box as "swept once" (orange)
+                if showSweepStatus and i < array.size(resBoxes)
+                    box.set_bgcolor(array.get(resBoxes, i),     color.new(color.orange, 85))
+                    box.set_border_color(array.get(resBoxes, i), color.new(color.orange, 50))
+            // 2nd sweep = A+ signal (only fire if RSI div check passes)
+            if newCnt >= 2
+                firstRsi = array.get(resFirstRsi, i)
+                rsiDivOk = (not useRsiDiv) or (na(firstRsi) ? false : rsi < firstRsi)
+                if (not requireSecondSweep) or (newCnt == 2 and rsiDivOk)
+                    aplusShortSignal := true
+                    sweepLevelShort  := level
 
-float activeSup = na
+// --- Support: bullish sweeps ---
 if array.size(supLevels) > 0
     for i = 0 to array.size(supLevels) - 1
-        l = array.get(supLevels, i)
-        b = array.get(supBars, i)
-        if (bar_index - b) >= minLevelAge
-            activeSup := l
+        level = array.get(supLevels, i)
+        cnt   = array.get(supSweepCount, i)
+        lastB = array.get(supLastSweepBar, i)
+        sweepEvent = low < level and close > level and low[1] >= level and (bar_index - lastB) >= minBarsBetweenSweeps
+        if sweepEvent
+            newCnt = cnt + 1
+            array.set(supSweepCount, i, newCnt)
+            array.set(supLastSweepBar, i, bar_index)
+            if newCnt == 1
+                array.set(supFirstRsi, i, rsi)
+                if showSweepStatus and i < array.size(supBoxes)
+                    box.set_bgcolor(array.get(supBoxes, i),     color.new(color.orange, 85))
+                    box.set_border_color(array.get(supBoxes, i), color.new(color.orange, 50))
+            if newCnt >= 2
+                firstRsi = array.get(supFirstRsi, i)
+                rsiDivOk = (not useRsiDiv) or (na(firstRsi) ? false : rsi > firstRsi)
+                if (not requireSecondSweep) or (newCnt == 2 and rsiDivOk)
+                    aplusLongSignal := true
+                    sweepLevelLong  := level
 
 // ══════════════════════════════════════════════════════════════════════════════
-// LIQUIDITY SWEEP DETECTION
+// REMOVE BROKEN LEVELS (close beyond level = invalid S/R)
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Bearish sweep = wick above resistance, close back below it
-bearishSweep = not na(activeRes) and high > activeRes and close < activeRes
+if array.size(resLevels) > 0
+    for i = array.size(resLevels) - 1 to 0
+        if close > array.get(resLevels, i)
+            array.remove(resLevels, i)
+            array.remove(resBars, i)
+            array.remove(resSweepCount, i)
+            array.remove(resLastSweepBar, i)
+            array.remove(resFirstRsi, i)
+            if i < array.size(resBoxes)
+                box.delete(array.get(resBoxes, i))
+                array.remove(resBoxes, i)
 
-// Bullish sweep = wick below support, close back above it
-bullishSweep = not na(activeSup) and low < activeSup and close > activeSup
+if array.size(supLevels) > 0
+    for i = array.size(supLevels) - 1 to 0
+        if close < array.get(supLevels, i)
+            array.remove(supLevels, i)
+            array.remove(supBars, i)
+            array.remove(supSweepCount, i)
+            array.remove(supLastSweepBar, i)
+            array.remove(supFirstRsi, i)
+            if i < array.size(supBoxes)
+                box.delete(array.get(supBoxes, i))
+                array.remove(supBoxes, i)
 
-// --- Strong rejection wick filter ---
+// ══════════════════════════════════════════════════════════════════════════════
+// CONFLUENCE FILTERS
+// ══════════════════════════════════════════════════════════════════════════════
+
 candleRange = high - low
 upperWick = high - math.max(close, open)
 lowerWick = math.min(close, open) - low
 strongUpperRejection = candleRange > 0 and (upperWick / candleRange) >= wickPct
 strongLowerRejection = candleRange > 0 and (lowerWick / candleRange) >= wickPct
-
-// --- Volume spike filter ---
 volSpike = volume > volMA * volMult
 
-// --- Cooldown ---
 var int barsSinceExit = 1000
 if strategy.position_size != 0
     barsSinceExit := 0
@@ -175,16 +255,15 @@ else
 cooldownOk = barsSinceExit > cooldownBars
 
 // ══════════════════════════════════════════════════════════════════════════════
-// A+ ENTRY CONDITIONS
+// FINAL A+ ENTRY CONDITIONS
 // ══════════════════════════════════════════════════════════════════════════════
 
-shortAplus = bearishSweep and (not useWickFilter or strongUpperRejection) and (not useVolFilter or volSpike) and (not useHtfBias or htfBear) and cooldownOk and inDateRange and tradeShort and strategy.position_size == 0
+shortAplus = aplusShortSignal and (not useWickFilter or strongUpperRejection) and (not useVolFilter or volSpike) and (not useHtfBias or htfBear) and cooldownOk and inDateRange and tradeShort and strategy.position_size == 0
 
-longAplus = bullishSweep and (not useWickFilter or strongLowerRejection) and (not useVolFilter or volSpike) and (not useHtfBias or htfBull) and cooldownOk and inDateRange and tradeLong and strategy.position_size == 0
+longAplus = aplusLongSignal and (not useWickFilter or strongLowerRejection) and (not useVolFilter or volSpike) and (not useHtfBias or htfBull) and cooldownOk and inDateRange and tradeLong and strategy.position_size == 0
 
 // ══════════════════════════════════════════════════════════════════════════════
-// EXECUTE TRADES + DRAW POSITION TOOL (inline — Pine v5 cannot modify
-// outer-scope drawings from inside functions, so all logic stays in main flow)
+// EXECUTE TRADES + DRAW POSITION TOOL (clean, no direction arrows)
 // ══════════════════════════════════════════════════════════════════════════════
 
 var float entryPrice = na
@@ -195,7 +274,11 @@ var int   entryBar   = na
 var box   tpBox    = na
 var box   slBox    = na
 var line  entryLn  = na
-var label tradeLbl = na
+var line  slLn     = na
+var line  tpLn     = na
+var label entryLbl = na
+var label slLbl    = na
+var label tpLbl    = na
 
 // --- LONG ENTRY ---
 if longAplus
@@ -206,19 +289,29 @@ if longAplus
     entryPrice := close
     entryBar   := bar_index
 
-    // Clear previous trade visuals (delete is safe on na)
+    // Clear previous trade visuals
     box.delete(tpBox)
     box.delete(slBox)
     line.delete(entryLn)
-    label.delete(tradeLbl)
+    line.delete(slLn)
+    line.delete(tpLn)
+    label.delete(entryLbl)
+    label.delete(slLbl)
+    label.delete(tpLbl)
 
     if showPositionTool
-        rightBar = bar_index + 30
-        tpBox   := box.new(bar_index, tpPrice,    rightBar, entryPrice, bgcolor=color.new(color.green, 80), border_color=color.new(color.green, 30), border_width=1)
-        slBox   := box.new(bar_index, entryPrice, rightBar, slPrice,    bgcolor=color.new(color.red, 80),   border_color=color.new(color.red, 30),   border_width=1)
-        entryLn := line.new(bar_index, entryPrice, rightBar, entryPrice, color=color.new(color.blue, 0), width=1, style=line.style_dashed)
-        labelTextLong = "LONG @ " + str.tostring(entryPrice, format.mintick) + "\nSL: " + str.tostring(slPrice, format.mintick) + "\nTP: " + str.tostring(tpPrice, format.mintick) + "\nR:R " + rrChoice
-        tradeLbl := label.new(bar_index, entryPrice, labelTextLong, style=label.style_label_lower_left, color=color.new(color.blue, 0), textcolor=color.white, size=size.small)
+        rightBar = bar_index + 60
+        // Zone boxes (TradingView Long Position tool style)
+        tpBox := box.new(bar_index, tpPrice,    rightBar, entryPrice, bgcolor=color.new(color.green, 75), border_color=color.new(color.green, 30), border_width=1)
+        slBox := box.new(bar_index, entryPrice, rightBar, slPrice,    bgcolor=color.new(color.red, 75),   border_color=color.new(color.red, 30),   border_width=1)
+        // Solid horizontal lines for entry / SL / TP
+        entryLn := line.new(bar_index, entryPrice, rightBar, entryPrice, color=color.new(color.blue, 0),  width=2, style=line.style_solid)
+        slLn    := line.new(bar_index, slPrice,    rightBar, slPrice,    color=color.new(color.red, 0),   width=2, style=line.style_solid)
+        tpLn    := line.new(bar_index, tpPrice,    rightBar, tpPrice,    color=color.new(color.green, 0), width=2, style=line.style_solid)
+        // Right-side price labels (clean — sit at end of lines)
+        entryLbl := label.new(rightBar, entryPrice, "ENTRY  " + str.tostring(entryPrice, format.mintick), style=label.style_label_left, color=color.new(color.blue, 0),  textcolor=color.white, size=size.small)
+        slLbl    := label.new(rightBar, slPrice,    "SL  "    + str.tostring(slPrice,    format.mintick), style=label.style_label_left, color=color.new(color.red, 0),   textcolor=color.white, size=size.small)
+        tpLbl    := label.new(rightBar, tpPrice,    "TP  "    + str.tostring(tpPrice,    format.mintick) + "  " + rrChoice, style=label.style_label_left, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
 
     strategy.entry("Long", strategy.long)
 
@@ -234,15 +327,22 @@ if shortAplus
     box.delete(tpBox)
     box.delete(slBox)
     line.delete(entryLn)
-    label.delete(tradeLbl)
+    line.delete(slLn)
+    line.delete(tpLn)
+    label.delete(entryLbl)
+    label.delete(slLbl)
+    label.delete(tpLbl)
 
     if showPositionTool
-        rightBar = bar_index + 30
-        tpBox   := box.new(bar_index, entryPrice, rightBar, tpPrice,    bgcolor=color.new(color.green, 80), border_color=color.new(color.green, 30), border_width=1)
-        slBox   := box.new(bar_index, slPrice,    rightBar, entryPrice, bgcolor=color.new(color.red, 80),   border_color=color.new(color.red, 30),   border_width=1)
-        entryLn := line.new(bar_index, entryPrice, rightBar, entryPrice, color=color.new(color.blue, 0), width=1, style=line.style_dashed)
-        labelTextShort = "SHORT @ " + str.tostring(entryPrice, format.mintick) + "\nSL: " + str.tostring(slPrice, format.mintick) + "\nTP: " + str.tostring(tpPrice, format.mintick) + "\nR:R " + rrChoice
-        tradeLbl := label.new(bar_index, entryPrice, labelTextShort, style=label.style_label_upper_left, color=color.new(color.blue, 0), textcolor=color.white, size=size.small)
+        rightBar = bar_index + 60
+        tpBox := box.new(bar_index, entryPrice, rightBar, tpPrice,    bgcolor=color.new(color.green, 75), border_color=color.new(color.green, 30), border_width=1)
+        slBox := box.new(bar_index, slPrice,    rightBar, entryPrice, bgcolor=color.new(color.red, 75),   border_color=color.new(color.red, 30),   border_width=1)
+        entryLn := line.new(bar_index, entryPrice, rightBar, entryPrice, color=color.new(color.blue, 0),  width=2, style=line.style_solid)
+        slLn    := line.new(bar_index, slPrice,    rightBar, slPrice,    color=color.new(color.red, 0),   width=2, style=line.style_solid)
+        tpLn    := line.new(bar_index, tpPrice,    rightBar, tpPrice,    color=color.new(color.green, 0), width=2, style=line.style_solid)
+        entryLbl := label.new(rightBar, entryPrice, "ENTRY  " + str.tostring(entryPrice, format.mintick), style=label.style_label_left, color=color.new(color.blue, 0),  textcolor=color.white, size=size.small)
+        slLbl    := label.new(rightBar, slPrice,    "SL  "    + str.tostring(slPrice,    format.mintick), style=label.style_label_left, color=color.new(color.red, 0),   textcolor=color.white, size=size.small)
+        tpLbl    := label.new(rightBar, tpPrice,    "TP  "    + str.tostring(tpPrice,    format.mintick) + "  " + rrChoice, style=label.style_label_left, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
 
     strategy.entry("Short", strategy.short)
 
@@ -255,40 +355,54 @@ if strategy.position_size < 0
 
 // --- Extend position tool right edge each bar while in trade ---
 if strategy.position_size != 0 and not na(tpBox)
-    box.set_right(tpBox, bar_index + 1)
-    box.set_right(slBox, bar_index + 1)
-    line.set_x2(entryLn, bar_index + 1)
+    nr = bar_index + 5
+    box.set_right(tpBox, nr)
+    box.set_right(slBox, nr)
+    line.set_x2(entryLn, nr)
+    line.set_x2(slLn, nr)
+    line.set_x2(tpLn, nr)
+    if not na(entryLbl)
+        label.set_x(entryLbl, nr)
+        label.set_x(slLbl, nr)
+        label.set_x(tpLbl, nr)
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SWEEP MARKERS
+// INFO TABLE (clean, no direction arrows)
 // ══════════════════════════════════════════════════════════════════════════════
 
-plotshape(showSweepMarks and shortAplus, "Bear Sweep", shape.labeldown, location.abovebar, color=color.new(color.red, 0), textcolor=color.white, text="SWEEP", size=size.tiny)
-plotshape(showSweepMarks and longAplus,  "Bull Sweep", shape.labelup,   location.belowbar, color=color.new(color.green, 0), textcolor=color.white, text="SWEEP", size=size.tiny)
-
-// ══════════════════════════════════════════════════════════════════════════════
-// INFO TABLE
-// ══════════════════════════════════════════════════════════════════════════════
-
-var table tbl = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 75), border_width=1, border_color=color.gray)
+var table tbl = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 75), border_width=1, border_color=color.gray)
 
 if barstate.islast and showInfoTable
-    table.cell(tbl, 0, 0, "LIQUIDITY SWEEP A+", text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 50))
+    table.cell(tbl, 0, 0, "2nd-SWEEP A+",      text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 50))
     table.cell(tbl, 1, 0, syminfo.ticker,        text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 50))
 
     htfLbl = htfTF == "60" ? "1H" : htfTF == "120" ? "2H" : htfTF == "240" ? "4H" : htfTF
     table.cell(tbl, 0, 1, htfLbl + " Bias", text_color=color.white, text_size=size.small)
     table.cell(tbl, 1, 1, htfBull ? "BULL" : htfBear ? "BEAR" : "FLAT", text_color=htfBull ? color.green : htfBear ? color.red : color.gray, text_size=size.small)
 
-    table.cell(tbl, 0, 2, "Active Resistance", text_color=color.white, text_size=size.small)
-    table.cell(tbl, 1, 2, na(activeRes) ? "—" : str.tostring(activeRes, format.mintick), text_color=color.red, text_size=size.small)
+    // Count active levels
+    int resTotal = array.size(resLevels)
+    int resOnce = 0
+    if resTotal > 0
+        for i = 0 to resTotal - 1
+            if array.get(resSweepCount, i) >= 1
+                resOnce := resOnce + 1
+    int supTotal = array.size(supLevels)
+    int supOnce = 0
+    if supTotal > 0
+        for i = 0 to supTotal - 1
+            if array.get(supSweepCount, i) >= 1
+                supOnce := supOnce + 1
 
-    table.cell(tbl, 0, 3, "Active Support", text_color=color.white, text_size=size.small)
-    table.cell(tbl, 1, 3, na(activeSup) ? "—" : str.tostring(activeSup, format.mintick), text_color=color.green, text_size=size.small)
+    table.cell(tbl, 0, 2, "Resistance levels", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 2, str.tostring(resTotal) + " (" + str.tostring(resOnce) + " primed)", text_color=color.red, text_size=size.small)
 
+    table.cell(tbl, 0, 3, "Support levels", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 3, str.tostring(supTotal) + " (" + str.tostring(supOnce) + " primed)", text_color=color.green, text_size=size.small)
+
+    table.cell(tbl, 0, 4, "Status", text_color=color.white, text_size=size.small)
     sigText = strategy.position_size > 0 ? "IN LONG" : strategy.position_size < 0 ? "IN SHORT" : "WAITING"
     sigCol  = strategy.position_size > 0 ? color.green : strategy.position_size < 0 ? color.red : color.gray
-    table.cell(tbl, 0, 4, "Status", text_color=color.white, text_size=size.small)
     table.cell(tbl, 1, 4, sigText, text_color=sigCol, text_size=size.small)
 
     table.cell(tbl, 0, 5, "R:R", text_color=color.white, text_size=size.small)
@@ -299,12 +413,15 @@ if barstate.islast and showInfoTable
 
     winRate = strategy.closedtrades > 0 ? (strategy.wintrades / strategy.closedtrades) * 100 : 0
     pf = strategy.grossloss != 0 ? math.abs(strategy.grossprofit / strategy.grossloss) : 0
-    table.cell(tbl, 0, 7, "Win% / PF / N", text_color=color.white, text_size=size.small)
-    table.cell(tbl, 1, 7, str.tostring(winRate, "#.#") + "% / " + str.tostring(pf, "#.##") + " / " + str.tostring(strategy.closedtrades), text_color=color.white, text_size=size.small)
+    table.cell(tbl, 0, 7, "Win% / PF", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 7, str.tostring(winRate, "#.#") + "% / " + str.tostring(pf, "#.##"), text_color=color.white, text_size=size.small)
+
+    table.cell(tbl, 0, 8, "Total trades", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 8, str.tostring(strategy.closedtrades), text_color=color.white, text_size=size.small)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ALERTS
 // ══════════════════════════════════════════════════════════════════════════════
 
-alertcondition(longAplus,  "A+ Long Sweep",  "A+ LONG: {{ticker}} swept support, bullish reversal @ {{close}}")
-alertcondition(shortAplus, "A+ Short Sweep", "A+ SHORT: {{ticker}} swept resistance, bearish reversal @ {{close}}")
+alertcondition(longAplus,  "A+ Long 2nd-Sweep",  "A+ LONG: {{ticker}} 2nd sweep of support @ {{close}}")
+alertcondition(shortAplus, "A+ Short 2nd-Sweep", "A+ SHORT: {{ticker}} 2nd sweep of resistance @ {{close}}")
